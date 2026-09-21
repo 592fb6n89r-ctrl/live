@@ -813,6 +813,11 @@ function processRaw(text,sim){
     return;
   }
   diag.ok++;
+  if(!sim && !liveConfirmed){
+    liveConfirmed=true; clearTimeout(liveWatchdog);
+    setWs('on','✅ @'+currentUser+' canlı yayımına qoşuldu. Hadisələr axır…');
+    log('sys','✅ <b>@'+esc(currentUser)+'</b> canlı yayımı təsdiqləndi.');
+  }
   const evs=[]; extractEvents(obj,evs,0);
   for(let i=0;i<evs.length;i++){
     try{ routeEvent(evs[i].type,evs[i].data,sim); }
@@ -829,6 +834,7 @@ function onFrame(data){
 
 /* ---------- WebSocket (Euler Stream) ---------- */
 let ws=null, manualClose=true, retryTimer=null, retryN=0, ignoreUntil=0, wsOpen=false;
+let liveWatchdog=null, liveConfirmed=false, currentUser='';
 const CLOSE_MSG={
   4400:['err','Yanlış parametr (istifadəçi adını yoxla).',false],
   4401:['err','API açarı yanlışdır və ya etibarsızdır.',false],
@@ -864,6 +870,7 @@ function connect(){
 }
 function openSocket(user,key){
   clearTimeout(retryTimer); retryTimer=null;
+  currentUser=user;
   setWs('wait','@'+user+' hesabına qoşulur…');
   const url='wss://ws.eulerstream.com/?uniqueId='+encodeURIComponent(user)+'&apiKey='+encodeURIComponent(key);
   let sock;
@@ -874,14 +881,21 @@ function openSocket(user,key){
     if(ws!==sock) return;
     wsOpen=true; retryN=0; ignoreUntil=Date.now()+1500;
     diag.frames=diag.ok=diag.bad=diag.bin=0; diag.types={};
-    setWs('on','✅ @'+user+' canlı yayımına qoşuldu. Hadisələr gözlənilir…');
-    log('sys','🔌 <b>@'+esc(user)+'</b> yayımına qoşuldu.');
+    liveConfirmed=false; clearTimeout(liveWatchdog);
+    setWs('wait','🔌 Serverə qoşuldu, @'+user+' yayımının aktiv olduğu yoxlanılır…');
+    log('sys','🔌 Serverə qoşuldu, <b>@'+esc(user)+'</b> yayımı gözlənilir…');
+    liveWatchdog=setTimeout(function(){
+      if(ws===sock && !liveConfirmed){
+        log('err','⚠ Qoşulma açıqdır, amma bir neçə saniyədir heç bir yayım məlumatı gəlmir. Çox güman ki, <b>@'+esc(user)+'</b> hazırda canlı yayımda deyil.');
+        setWs('wait','⏳ @'+user+' hazırda canlı görünmür — yayımı başlatsan avtomatik təsdiqlənəcək.');
+      }
+    },8000);
   };
   sock.onmessage=function(ev){ if(ws===sock) onFrame(ev.data); };
   sock.onerror=function(){ /* təfərrüat onclose-da */ };
   sock.onclose=function(ev){
     if(ws!==sock) return;
-    ws=null; wsOpen=false;
+    ws=null; wsOpen=false; clearTimeout(liveWatchdog);
     if(manualClose){ setWs('off','Bağlantı ayrıldı.'); return; }
     const info=CLOSE_MSG[ev.code];
     if(info){
@@ -903,7 +917,7 @@ function scheduleRetry(user,key,ms){
   $('#btnDisconnect').disabled=false;
 }
 function killSocket(){
-  clearTimeout(retryTimer); retryTimer=null;
+  clearTimeout(retryTimer); retryTimer=null; clearTimeout(liveWatchdog);
   if(ws){ const s=ws; ws=null; try{ s.onclose=null; s.onmessage=null; s.onerror=null; s.close(1000); }catch(e){} }
   wsOpen=false;
 }
